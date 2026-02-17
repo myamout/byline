@@ -1,7 +1,37 @@
 [tools]
 go = "1.25.5"
 
+[env]
+_.file = [".env.local"]
+
 [tasks."backend:test"]
 description = "Run backend test suites"
 dir = "backend"
 run = "go test -v -cover ./..."
+
+[tasks."db:migrate:up"]
+description = "Run database migrations up"
+dir = "backend"
+run = "go run ./cmd/migrate up"
+
+[tasks."db:migrate:down"]
+description = "Rollback last database migration"
+dir = "backend"
+run = "go run ./cmd/migrate down"
+
+[tasks."db:migrate:force"]
+description = "Force migration version (usage: VERSION=N mise run db:migrate:force)"
+dir = "backend"
+run = """
+if [ -z "$VERSION" ]; then
+  echo "Error: VERSION environment variable is not set"
+  echo "Usage: VERSION=N mise run db:migrate:force"
+  exit 1
+fi
+go run ./cmd/migrate force "$VERSION"
+"""
+
+[tasks."db:migrate:version"]
+description = "Show current migration version"
+dir = "backend"
+run = "go run ./cmd/migrate version"
