@@ -1,8 +1,6 @@
 package poller
 
 import (
-	"context"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -140,20 +138,109 @@ func TestRepoToFeedItem_FetchedAtIsSet(t *testing.T) {
 	}
 }
 
-func TestLogStore_Save(t *testing.T) {
-	logger := slog.Default()
-	store := NewLogStore(logger)
+func TestFeedItemToArticle(t *testing.T) {
+	posted := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	items := []FeedItem{
-		{
-			Source: SourceReddit,
-			Title:  "Test Item",
-			URL:    "https://example.com/test",
+	item := FeedItem{
+		Source:      SourceReddit,
+		Title:       "Cool Go Article",
+		URL:         "https://example.com/cool-article",
+		Author:      "gopher42",
+		PublishedAt: posted,
+		Metadata: map[string]string{
+			"subreddit":   "golang",
+			"reddit_link": "https://www.reddit.com/r/golang/comments/abc123",
 		},
 	}
 
-	err := store.Save(context.Background(), items)
-	if err != nil {
-		t.Errorf("Save returned unexpected error: %v", err)
+	article := feedItemToArticle(item)
+
+	if article.Author != "gopher42" {
+		t.Errorf("Author = %q, want %q", article.Author, "gopher42")
+	}
+	if article.Subreddit != "golang" {
+		t.Errorf("Subreddit = %q, want %q", article.Subreddit, "golang")
+	}
+	if !article.PostedAt.Equal(posted) {
+		t.Errorf("PostedAt = %v, want %v", article.PostedAt, posted)
+	}
+	if article.ArticleLink != "https://example.com/cool-article" {
+		t.Errorf("ArticleLink = %q, want %q", article.ArticleLink, "https://example.com/cool-article")
+	}
+	if article.Title != "Cool Go Article" {
+		t.Errorf("Title = %q, want %q", article.Title, "Cool Go Article")
+	}
+	if article.RedditLink != "https://www.reddit.com/r/golang/comments/abc123" {
+		t.Errorf("RedditLink = %q, want %q", article.RedditLink, "https://www.reddit.com/r/golang/comments/abc123")
+	}
+}
+
+func TestFeedItemToRepository(t *testing.T) {
+	item := FeedItem{
+		Source:      SourceOSSInsight,
+		Title:       "myorg/myrepo",
+		URL:         "https://github.com/myorg/myrepo",
+		Description: "An awesome repository",
+		Metadata: map[string]string{
+			"stars":         "1500",
+			"forks":         "200",
+			"pull_requests": "50",
+			"total_score":   "9000",
+			"language":      "Go",
+		},
+	}
+
+	repo := feedItemToRepository(item)
+
+	if repo.RepoName != "myorg/myrepo" {
+		t.Errorf("RepoName = %q, want %q", repo.RepoName, "myorg/myrepo")
+	}
+	if repo.PrimaryLanguage != "Go" {
+		t.Errorf("PrimaryLanguage = %q, want %q", repo.PrimaryLanguage, "Go")
+	}
+	if repo.Description != "An awesome repository" {
+		t.Errorf("Description = %q, want %q", repo.Description, "An awesome repository")
+	}
+	if repo.Stars != 1500 {
+		t.Errorf("Stars = %d, want %d", repo.Stars, 1500)
+	}
+	if repo.Forks != 200 {
+		t.Errorf("Forks = %d, want %d", repo.Forks, 200)
+	}
+	if repo.PullRequests != 50 {
+		t.Errorf("PullRequests = %d, want %d", repo.PullRequests, 50)
+	}
+	if repo.TotalScore != 9000 {
+		t.Errorf("TotalScore = %d, want %d", repo.TotalScore, 9000)
+	}
+}
+
+func TestFeedItemToRepository_MissingMetadata(t *testing.T) {
+	item := FeedItem{
+		Source:      SourceOSSInsight,
+		Title:       "org/repo",
+		Description: "No numeric metadata",
+		Metadata:    map[string]string{},
+	}
+
+	repo := feedItemToRepository(item)
+
+	if repo.RepoName != "org/repo" {
+		t.Errorf("RepoName = %q, want %q", repo.RepoName, "org/repo")
+	}
+	if repo.PrimaryLanguage != "" {
+		t.Errorf("PrimaryLanguage = %q, want empty string", repo.PrimaryLanguage)
+	}
+	if repo.Stars != 0 {
+		t.Errorf("Stars = %d, want 0", repo.Stars)
+	}
+	if repo.Forks != 0 {
+		t.Errorf("Forks = %d, want 0", repo.Forks)
+	}
+	if repo.PullRequests != 0 {
+		t.Errorf("PullRequests = %d, want 0", repo.PullRequests)
+	}
+	if repo.TotalScore != 0 {
+		t.Errorf("TotalScore = %d, want 0", repo.TotalScore)
 	}
 }
