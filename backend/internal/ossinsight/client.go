@@ -135,6 +135,19 @@ func NewClient() *Client {
 	}
 }
 
+// NewClientWithBaseURL creates a Client that targets the given base URL instead
+// of the default OSSInsight API. This is primarily useful in tests where an
+// httptest.Server stands in for the real API.
+func NewClientWithBaseURL(baseURL string, httpClient *http.Client) *Client {
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: defaultTimeout}
+	}
+	return &Client{
+		httpClient: httpClient,
+		baseURL:    baseURL,
+	}
+}
+
 // GetTrendingRepos retrieves a list of trending repositories from the OSSInsight API.
 // The results can be filtered by time period and programming language using opts.
 func (c *Client) GetTrendingRepos(ctx context.Context, opts TrendingReposOptions) ([]Repository, error) {

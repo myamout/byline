@@ -9,6 +9,11 @@ description = "Run backend test suites"
 dir = "backend"
 run = "go test -v -cover ./..."
 
+[tasks."backend:poller"]
+description = "Run the poller"
+dir = "backend"
+run = "go run ./cmd/poller"
+
 [tasks."db:migrate:up"]
 description = "Run database migrations up"
 dir = "backend"

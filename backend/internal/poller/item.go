@@ -3,7 +3,7 @@
 package poller
 
 import (
-	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/myamout/byline/backend/internal/ossinsight"
@@ -81,11 +81,40 @@ func repoToFeedItem(r ossinsight.Repository) FeedItem {
 		Tags:        []string{r.PrimaryLanguage},
 		FetchedAt:   time.Now(),
 		Metadata: map[string]string{
-			"stars":         fmt.Sprintf("%d", r.Stars),
-			"forks":         fmt.Sprintf("%d", r.Forks),
-			"pull_requests": fmt.Sprintf("%d", r.PullRequests),
-			"total_score":   fmt.Sprintf("%d", r.TotalScore),
+			"stars":         strconv.Itoa(r.Stars),
+			"forks":         strconv.Itoa(r.Forks),
+			"pull_requests": strconv.Itoa(r.PullRequests),
+			"total_score":   strconv.Itoa(r.TotalScore),
 			"language":      r.PrimaryLanguage,
 		},
+	}
+}
+
+// feedItemToArticle converts a FeedItem back to a reddit.Article for persistence.
+func feedItemToArticle(item FeedItem) reddit.Article {
+	return reddit.Article{
+		Author:      item.Author,
+		Subreddit:   item.Metadata["subreddit"],
+		PostedAt:    item.PublishedAt,
+		ArticleLink: item.URL,
+		Title:       item.Title,
+		RedditLink:  item.Metadata["reddit_link"],
+	}
+}
+
+// feedItemToRepository converts a FeedItem back to an ossinsight.Repository for persistence.
+func feedItemToRepository(item FeedItem) ossinsight.Repository {
+	stars, _ := strconv.Atoi(item.Metadata["stars"])
+	forks, _ := strconv.Atoi(item.Metadata["forks"])
+	prs, _ := strconv.Atoi(item.Metadata["pull_requests"])
+	score, _ := strconv.Atoi(item.Metadata["total_score"])
+	return ossinsight.Repository{
+		RepoName:        item.Title,
+		PrimaryLanguage: item.Metadata["language"],
+		Description:     item.Description,
+		Stars:           stars,
+		Forks:           forks,
+		PullRequests:    prs,
+		TotalScore:      score,
 	}
 }
