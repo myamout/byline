@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -14,6 +15,9 @@ import (
 )
 
 func main() {
+	once := flag.Bool("once", false, "fetch each source once and exit")
+	flag.Parse()
+
 	// Set up structured logging.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -58,6 +62,7 @@ func main() {
 			Interval: 30 * time.Minute,
 		},
 		FetchTimeout: 30 * time.Second,
+		Once:         *once,
 	}
 
 	p := poller.New(cfg, st, logger)

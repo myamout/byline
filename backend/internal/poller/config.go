@@ -22,6 +22,10 @@ type Config struct {
 	// FetchTimeout is the maximum duration allowed for a single fetch
 	// operation across all sources.
 	FetchTimeout time.Duration
+
+	// Once, when true, causes the poller to fetch each source exactly once
+	// and then exit instead of looping on a ticker. Useful for local testing.
+	Once bool
 }
 
 // RedditConfig holds settings for the Reddit RSS feed source.

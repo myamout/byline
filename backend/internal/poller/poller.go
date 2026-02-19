@@ -20,6 +20,7 @@ type Poller struct {
 	store        store.Store
 	logger       *slog.Logger
 	fetchTimeout time.Duration
+	once         bool
 }
 
 type sourceRunner struct {
@@ -35,6 +36,7 @@ func New(cfg Config, st store.Store, logger *slog.Logger) *Poller {
 		store:        st,
 		logger:       logger,
 		fetchTimeout: cfg.FetchTimeout,
+		once:         cfg.Once,
 	}
 
 	if p.fetchTimeout == 0 {
@@ -114,6 +116,11 @@ func (p *Poller) Run(ctx context.Context) error {
 func (p *Poller) runSource(ctx context.Context, r sourceRunner) {
 	// Fetch immediately on startup.
 	p.fetchAndStore(ctx, r.source)
+
+	if p.once {
+		p.logger.Info("single run complete", "source", r.source.Name())
+		return
+	}
 
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
