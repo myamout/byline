@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 )
@@ -47,6 +48,16 @@ const (
 		contributor_logins, collection_names,
 		trending_period, trending_language,
 		fetched_at, created_at, updated_at`
+
+	upsertNewsArticleSQL = `
+		INSERT INTO news_articles (title, article_url, source_name, source_url, published_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (article_url) DO UPDATE SET
+			title       = EXCLUDED.title,
+			source_name = EXCLUDED.source_name,
+			source_url  = EXCLUDED.source_url,
+			published_at = EXCLUDED.published_at,
+			updated_at  = NOW()`
 )
 
 // PostgresStore implements Store using pgxpool.
@@ -315,6 +326,106 @@ func (s *PostgresStore) DeleteTrendingRepo(ctx context.Context, id int64) (bool,
 	ct, err := s.pool.Exec(ctx, `DELETE FROM trending_repos WHERE id = $1`, id)
 	if err != nil {
 		return false, fmt.Errorf("deleting trending repo: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
+// ---------------------------------------------------------------------------
+// News Articles
+// ---------------------------------------------------------------------------
+
+// newsArticleArgs returns the query arguments for a news article upsert,
+// in column order.
+func newsArticleArgs(a googlenews.Article) []any {
+	return []any{a.Title, a.URL, a.Source, a.SourceURL, a.PublishedAt}
+}
+
+// UpsertNewsArticle inserts a news article or updates it if the
+// article_url already exists. Returns the row ID.
+func (s *PostgresStore) UpsertNewsArticle(ctx context.Context, article googlenews.Article) (int64, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, upsertNewsArticleSQL+"\n\t\tRETURNING id",
+		newsArticleArgs(article)...,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("upserting news article: %w", classifyError(err))
+	}
+	return id, nil
+}
+
+// UpsertNewsArticles batch-upserts multiple news articles in a single transaction.
+// Returns the number of rows affected.
+func (s *PostgresStore) UpsertNewsArticles(ctx context.Context, articles []googlenews.Article) (int64, error) {
+	if len(articles) == 0 {
+		return 0, nil
+	}
+
+	batch := &pgx.Batch{}
+	for _, a := range articles {
+		batch.Queue(upsertNewsArticleSQL, newsArticleArgs(a)...)
+	}
+
+	affected, err := s.execBatch(ctx, batch, len(articles))
+	if err != nil {
+		return 0, fmt.Errorf("batch upserting news articles: %w", classifyError(err))
+	}
+	return affected, nil
+}
+
+// GetNewsArticleByID retrieves a single news article by its database ID.
+func (s *PostgresStore) GetNewsArticleByID(ctx context.Context, id int64) (*googlenews.Article, error) {
+	var a googlenews.Article
+	err := s.pool.QueryRow(ctx, `
+		SELECT title, article_url, source_name, source_url, published_at
+		FROM news_articles
+		WHERE id = $1
+	`, id).Scan(&a.Title, &a.URL, &a.Source, &a.SourceURL, &a.PublishedAt)
+	if err != nil {
+		return nil, mapNotFound(err, "getting news article by ID")
+	}
+	return &a, nil
+}
+
+// ListNewsArticles retrieves news articles, ordered by published_at desc.
+// Supports cursor-based pagination via the opts parameter.
+func (s *PostgresStore) ListNewsArticles(ctx context.Context, opts ListOptions) ([]googlenews.Article, error) {
+	limit := clampLimit(opts.Limit)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, title, article_url, source_name, source_url, published_at
+		FROM news_articles
+		WHERE ($1::bigint = 0 OR id < $1)
+		ORDER BY published_at DESC, id DESC
+		LIMIT $2
+	`, opts.Cursor, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing news articles: %w", err)
+	}
+	defer rows.Close()
+
+	var articles []googlenews.Article
+	for rows.Next() {
+		var (
+			rowID int64
+			a     googlenews.Article
+		)
+		if err := rows.Scan(&rowID, &a.Title, &a.URL, &a.Source, &a.SourceURL, &a.PublishedAt); err != nil {
+			return nil, fmt.Errorf("scanning news article row: %w", err)
+		}
+		articles = append(articles, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating news article rows: %w", err)
+	}
+	return articles, nil
+}
+
+// DeleteNewsArticle removes a news article by its database ID.
+// Returns true if a row was deleted, false if no row matched.
+func (s *PostgresStore) DeleteNewsArticle(ctx context.Context, id int64) (bool, error) {
+	ct, err := s.pool.Exec(ctx, `DELETE FROM news_articles WHERE id = $1`, id)
+	if err != nil {
+		return false, fmt.Errorf("deleting news article: %w", err)
 	}
 	return ct.RowsAffected() > 0, nil
 }

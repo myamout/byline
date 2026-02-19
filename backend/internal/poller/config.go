@@ -15,6 +15,10 @@ type Config struct {
 	// OSSInsight polling is disabled.
 	OSSInsight *OSSInsightConfig
 
+	// GoogleNews configures the Google News RSS source. If nil, Google News
+	// polling is disabled.
+	GoogleNews *GoogleNewsConfig
+
 	// FetchTimeout is the maximum duration allowed for a single fetch
 	// operation across all sources.
 	FetchTimeout time.Duration
@@ -35,5 +39,14 @@ type OSSInsightConfig struct {
 	Queries []ossinsight.TrendingReposOptions
 
 	// Interval is the time between successive polls of the OSSInsight API.
+	Interval time.Duration
+}
+
+// GoogleNewsConfig holds settings for the Google News RSS feed source.
+type GoogleNewsConfig struct {
+	// FeedURL is the Google News RSS feed URL to poll.
+	FeedURL string
+
+	// Interval is the time between successive polls of the feed.
 	Interval time.Duration
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 )
@@ -44,11 +45,13 @@ func (f *fakeSource) CallCount() int {
 // recordingStore wraps LogStore and records which persistence methods were called.
 type recordingStore struct {
 	*LogStore
-	mu             sync.Mutex
-	upsertCalls    int
-	upsertArticles []reddit.Article
-	insertCalls    int
-	insertRepos    []ossinsight.Repository
+	mu                 sync.Mutex
+	upsertCalls        int
+	upsertArticles     []reddit.Article
+	insertCalls        int
+	insertRepos        []ossinsight.Repository
+	upsertNewsCalls    int
+	upsertNewsArticles []googlenews.Article
 }
 
 func (s *recordingStore) UpsertArticles(ctx context.Context, articles []reddit.Article) (int64, error) {
@@ -65,6 +68,14 @@ func (s *recordingStore) InsertTrendingRepos(ctx context.Context, repos []ossins
 	s.insertRepos = append(s.insertRepos, repos...)
 	s.mu.Unlock()
 	return s.LogStore.InsertTrendingRepos(ctx, repos, period, language)
+}
+
+func (s *recordingStore) UpsertNewsArticles(ctx context.Context, articles []googlenews.Article) (int64, error) {
+	s.mu.Lock()
+	s.upsertNewsCalls++
+	s.upsertNewsArticles = append(s.upsertNewsArticles, articles...)
+	s.mu.Unlock()
+	return s.LogStore.UpsertNewsArticles(ctx, articles)
 }
 
 func newTestLogger() *slog.Logger {
@@ -392,5 +403,56 @@ func TestNew_NilConfigs(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return promptly with no sources")
+	}
+}
+
+func googleNewsFeedItems(n int) []FeedItem {
+	items := make([]FeedItem, n)
+	for i := range items {
+		items[i] = FeedItem{
+			Source:      SourceGoogleNews,
+			Title:       "news article",
+			URL:         "https://example.com/news/article",
+			PublishedAt: time.Now(),
+			Metadata: map[string]string{
+				"source_name": "Publisher",
+				"source_url":  "https://www.publisher.com",
+			},
+		}
+	}
+	return items
+}
+
+func TestPoller_Persist_GoogleNewsRouting(t *testing.T) {
+	logger := newTestLogger()
+	rec := &recordingStore{LogStore: NewLogStore(logger)}
+
+	src := &fakeSource{
+		name:  "googlenews",
+		items: googleNewsFeedItems(3),
+	}
+
+	p := NewBase(rec, logger, 5*time.Second)
+	p.AddSource(src, 1*time.Hour)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = p.Run(ctx)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+
+	if rec.upsertNewsCalls == 0 {
+		t.Fatal("UpsertNewsArticles was never called")
+	}
+	if rec.upsertCalls != 0 {
+		t.Errorf("UpsertArticles was called %d times, want 0 for googlenews source", rec.upsertCalls)
+	}
+	if rec.insertCalls != 0 {
+		t.Errorf("InsertTrendingRepos was called %d times, want 0 for googlenews source", rec.insertCalls)
+	}
+	if len(rec.upsertNewsArticles) != 3 {
+		t.Errorf("UpsertNewsArticles received %d articles, want 3", len(rec.upsertNewsArticles))
 	}
 }

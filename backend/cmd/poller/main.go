@@ -53,6 +53,10 @@ func main() {
 			},
 			Interval: 1 * time.Hour,
 		},
+		GoogleNews: &poller.GoogleNewsConfig{
+			FeedURL:  "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
+			Interval: 30 * time.Minute,
+		},
 		FetchTimeout: 30 * time.Second,
 	}
 
@@ -62,6 +66,8 @@ func main() {
 		"subreddits", cfg.Reddit.Subreddits,
 		"reddit_interval", cfg.Reddit.Interval,
 		"ossinsight_interval", cfg.OSSInsight.Interval,
+		"googlenews_feed", cfg.GoogleNews.FeedURL,
+		"googlenews_interval", cfg.GoogleNews.Interval,
 	)
 
 	if err := p.Run(ctx); err != nil && err != context.Canceled {

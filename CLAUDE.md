@@ -46,6 +46,7 @@ backend/
   internal/
     reddit/                # RSS feed parser → Article structs
     ossinsight/            # HTTP client for OSSInsight trending API → Repository structs
+    googlenews/            # Google News RSS parser → Article structs
     poller/                # Orchestrator: Source interface, adapters, FeedItem normalization
     store/                 # Persistence: Store interface, PostgresStore, migrations
 ```
@@ -58,13 +59,17 @@ Poller.Run(ctx) spawns one goroutine per source
   ├─ RedditSource.Fetch(ctx)
   │    reddit.Parser.ParseSubreddit → []Article → toFeedItem() → []FeedItem
   │
-  └─ OSSInsightSource.Fetch(ctx)
-       ossinsight.Client.GetTrendingRepos → []Repository → repoToFeedItem() → []FeedItem
+  ├─ OSSInsightSource.Fetch(ctx)
+  │    ossinsight.Client.GetTrendingRepos → []Repository → repoToFeedItem() → []FeedItem
+  │
+  └─ GoogleNewsSource.Fetch(ctx)
+       googlenews.Parser.ParseFeed → []Article → newsToFeedItem() → []FeedItem
   │
   v
 Poller.persist() routes by source name:
   "reddit"     → feedItemToArticle()  → store.UpsertArticles()    (ON CONFLICT upsert)
   "ossinsight" → feedItemToRepository() → store.InsertTrendingRepos() (point-in-time snapshot)
+  "googlenews" → feedItemToNewsArticle() → store.UpsertNewsArticles()  (ON CONFLICT upsert)
 ```
 
 ### Key packages
@@ -73,13 +78,15 @@ Poller.persist() routes by source name:
 
 **`ossinsight`** — `Client` wraps `http.Client` for `GET /v1/trending/repos`. Configurable via `TrendingReposOptions` (Period, Language). Output: `Repository` struct.
 
+**`googlenews`** — `Parser` wraps `gofeed.Parser` + `http.Client`. Entry points: `ParseFeed` (fetches + resolves redirects), `ParseString` (for testing). Resolves Google News redirect URLs to actual article URLs via HTTP HEAD. Output: `Article` struct.
+
 **`poller`** — The orchestrator. `Source` interface (`Name()` + `Fetch(ctx)`) with `RedditSource` and `OSSInsightSource` adapters. Each source runs in its own goroutine with an independent `time.Ticker`. `FeedItem` is the normalized intermediate type. The `persist` method converts back to domain types and calls the appropriate `store.Store` method. `LogStore` implements `store.Store` for development without a database.
 
 **`store`** — `Store` interface with typed CRUD methods for both data sources. `PostgresStore` uses `pgxpool` with batch transactions, cursor-based pagination (`ListOptions`), and `ON CONFLICT` upserts for Reddit deduplication. Sentinel errors: `ErrNotFound`, `ErrDuplicateKey`. Migrations in `internal/store/migrations/` managed by `golang-migrate`.
 
 ### Concurrency model
 
-- One goroutine per source with independent ticker intervals (default: 5m Reddit, 1h OSSInsight)
+- One goroutine per source with independent ticker intervals (default: 5m Reddit, 1h OSSInsight, 30m Google News)
 - Per-fetch `context.WithTimeout` (default 30s) prevents hung requests
 - `sync.WaitGroup` for clean drain on shutdown
 - `signal.NotifyContext` handles SIGINT/SIGTERM in the poller entry point

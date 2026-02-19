@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 	"github.com/myamout/byline/backend/internal/store"
@@ -68,6 +69,30 @@ func (s *LogStore) ListTrendingRepos(_ context.Context, _ store.TrendingRepoFilt
 }
 
 func (s *LogStore) DeleteTrendingRepo(_ context.Context, _ int64) (bool, error) {
+	return false, nil
+}
+
+func (s *LogStore) UpsertNewsArticle(_ context.Context, article googlenews.Article) (int64, error) {
+	s.logger.Info("upsert news article", "title", article.Title, "url", article.URL)
+	return 1, nil
+}
+
+func (s *LogStore) UpsertNewsArticles(_ context.Context, articles []googlenews.Article) (int64, error) {
+	for _, a := range articles {
+		s.logger.Info("upsert news article", "title", a.Title, "url", a.URL)
+	}
+	return int64(len(articles)), nil
+}
+
+func (s *LogStore) GetNewsArticleByID(_ context.Context, _ int64) (*googlenews.Article, error) {
+	return nil, store.ErrNotFound
+}
+
+func (s *LogStore) ListNewsArticles(_ context.Context, _ store.ListOptions) ([]googlenews.Article, error) {
+	return nil, nil
+}
+
+func (s *LogStore) DeleteNewsArticle(_ context.Context, _ int64) (bool, error) {
 	return false, nil
 }
 

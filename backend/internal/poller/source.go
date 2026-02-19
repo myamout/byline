@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 )
@@ -24,6 +25,7 @@ type Source interface {
 var (
 	_ Source = (*RedditSource)(nil)
 	_ Source = (*OSSInsightSource)(nil)
+	_ Source = (*GoogleNewsSource)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -103,6 +105,37 @@ func (s *OSSInsightSource) Fetch(ctx context.Context) ([]FeedItem, error) {
 		for _, r := range repos {
 			items = append(items, repoToFeedItem(r))
 		}
+	}
+	return items, nil
+}
+
+// ---------------------------------------------------------------------------
+// GoogleNewsSource
+// ---------------------------------------------------------------------------
+
+// GoogleNewsSource adapts a googlenews.Parser into the Source interface.
+type GoogleNewsSource struct {
+	parser  *googlenews.Parser
+	feedURL string
+}
+
+// NewGoogleNewsSource creates a GoogleNewsSource that fetches the given feed URL.
+func NewGoogleNewsSource(parser *googlenews.Parser, feedURL string) *GoogleNewsSource {
+	return &GoogleNewsSource{parser: parser, feedURL: feedURL}
+}
+
+// Name returns "googlenews".
+func (s *GoogleNewsSource) Name() string { return "googlenews" }
+
+// Fetch retrieves articles from the Google News RSS feed and converts them to FeedItems.
+func (s *GoogleNewsSource) Fetch(ctx context.Context) ([]FeedItem, error) {
+	articles, err := s.parser.ParseFeed(ctx, s.feedURL)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]FeedItem, 0, len(articles))
+	for _, a := range articles {
+		items = append(items, newsToFeedItem(a))
 	}
 	return items, nil
 }

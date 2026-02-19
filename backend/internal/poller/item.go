@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 )
@@ -19,6 +20,9 @@ const (
 
 	// SourceOSSInsight indicates the item was fetched from the OSSInsight API.
 	SourceOSSInsight SourceType = "ossinsight"
+
+	// SourceGoogleNews indicates the item was fetched from a Google News RSS feed.
+	SourceGoogleNews SourceType = "googlenews"
 )
 
 // FeedItem is the normalized representation of a piece of content from any
@@ -116,5 +120,32 @@ func feedItemToRepository(item FeedItem) ossinsight.Repository {
 		Forks:           forks,
 		PullRequests:    prs,
 		TotalScore:      score,
+	}
+}
+
+// newsToFeedItem converts a googlenews.Article into a normalized FeedItem.
+func newsToFeedItem(a googlenews.Article) FeedItem {
+	return FeedItem{
+		Source:      SourceGoogleNews,
+		Title:       a.Title,
+		URL:         a.URL,
+		Tags:        []string{a.Source},
+		PublishedAt: a.PublishedAt,
+		FetchedAt:   time.Now(),
+		Metadata: map[string]string{
+			"source_name": a.Source,
+			"source_url":  a.SourceURL,
+		},
+	}
+}
+
+// feedItemToNewsArticle converts a FeedItem back to a googlenews.Article for persistence.
+func feedItemToNewsArticle(item FeedItem) googlenews.Article {
+	return googlenews.Article{
+		Title:       item.Title,
+		URL:         item.URL,
+		Source:      item.Metadata["source_name"],
+		SourceURL:   item.Metadata["source_url"],
+		PublishedAt: item.PublishedAt,
 	}
 }
