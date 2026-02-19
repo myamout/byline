@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 )
@@ -64,6 +65,27 @@ type Store interface {
 	// DeleteTrendingRepo removes a trending repo record by its database ID.
 	// Returns true if a row was deleted, false if no row matched.
 	DeleteTrendingRepo(ctx context.Context, id int64) (bool, error)
+
+	// --- News Articles ---
+
+	// UpsertNewsArticle inserts a news article or updates it if the
+	// article_url already exists.
+	UpsertNewsArticle(ctx context.Context, article googlenews.Article) (int64, error)
+
+	// UpsertNewsArticles batch-upserts multiple news articles in a single transaction.
+	// Returns the number of rows affected.
+	UpsertNewsArticles(ctx context.Context, articles []googlenews.Article) (int64, error)
+
+	// GetNewsArticleByID retrieves a single news article by its database ID.
+	GetNewsArticleByID(ctx context.Context, id int64) (*googlenews.Article, error)
+
+	// ListNewsArticles retrieves news articles, ordered by published_at desc.
+	// Supports cursor-based pagination via the opts parameter.
+	ListNewsArticles(ctx context.Context, opts ListOptions) ([]googlenews.Article, error)
+
+	// DeleteNewsArticle removes a news article by its database ID.
+	// Returns true if a row was deleted, false if no row matched.
+	DeleteNewsArticle(ctx context.Context, id int64) (bool, error)
 
 	// --- Lifecycle ---
 
