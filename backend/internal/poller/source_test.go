@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 )
@@ -488,5 +489,29 @@ func TestOSSInsightSource_Fetch_QueryParams(t *testing.T) {
 				t.Fatalf("Fetch() returned unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GoogleNewsSource tests
+// ---------------------------------------------------------------------------
+
+func TestGoogleNewsSource_Name(t *testing.T) {
+	src := NewGoogleNewsSource(googlenews.NewParser(), "https://example.com/rss")
+	if got := src.Name(); got != "googlenews" {
+		t.Errorf("Name() = %q, want %q", got, "googlenews")
+	}
+}
+
+func TestGoogleNewsSource_Fetch_CancelledContext(t *testing.T) {
+	parser := googlenews.NewParser()
+	src := NewGoogleNewsSource(parser, "https://news.google.com/rss")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := src.Fetch(ctx)
+	if err == nil {
+		t.Error("Expected error for cancelled context, got nil")
 	}
 }

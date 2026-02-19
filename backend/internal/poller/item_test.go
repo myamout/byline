@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 )
@@ -242,5 +243,106 @@ func TestFeedItemToRepository_MissingMetadata(t *testing.T) {
 	}
 	if repo.TotalScore != 0 {
 		t.Errorf("TotalScore = %d, want 0", repo.TotalScore)
+	}
+}
+
+func TestNewsToFeedItem(t *testing.T) {
+	published := time.Date(2026, 2, 19, 10, 30, 0, 0, time.UTC)
+
+	article := googlenews.Article{
+		Title:       "Breaking News - The Times",
+		URL:         "https://www.thetimes.com/article/123",
+		Source:      "The Times",
+		SourceURL:   "https://www.thetimes.com",
+		PublishedAt: published,
+	}
+
+	item := newsToFeedItem(article)
+
+	if item.Source != SourceGoogleNews {
+		t.Errorf("Source = %q, want %q", item.Source, SourceGoogleNews)
+	}
+	if item.Title != article.Title {
+		t.Errorf("Title = %q, want %q", item.Title, article.Title)
+	}
+	if item.URL != article.URL {
+		t.Errorf("URL = %q, want %q", item.URL, article.URL)
+	}
+	if item.Author != "" {
+		t.Errorf("Author = %q, want empty", item.Author)
+	}
+	if !item.PublishedAt.Equal(published) {
+		t.Errorf("PublishedAt = %v, want %v", item.PublishedAt, published)
+	}
+	if len(item.Tags) != 1 || item.Tags[0] != "The Times" {
+		t.Errorf("Tags = %v, want [The Times]", item.Tags)
+	}
+	if item.Metadata["source_name"] != "The Times" {
+		t.Errorf("Metadata[source_name] = %q, want %q", item.Metadata["source_name"], "The Times")
+	}
+	if item.Metadata["source_url"] != "https://www.thetimes.com" {
+		t.Errorf("Metadata[source_url] = %q, want %q", item.Metadata["source_url"], "https://www.thetimes.com")
+	}
+}
+
+func TestNewsToFeedItem_FetchedAtIsSet(t *testing.T) {
+	before := time.Now()
+	article := googlenews.Article{Title: "Test", URL: "https://example.com"}
+	item := newsToFeedItem(article)
+	after := time.Now()
+
+	if item.FetchedAt.Before(before) || item.FetchedAt.After(after) {
+		t.Errorf("FetchedAt = %v, want between %v and %v", item.FetchedAt, before, after)
+	}
+}
+
+func TestFeedItemToNewsArticle(t *testing.T) {
+	published := time.Date(2026, 2, 19, 10, 30, 0, 0, time.UTC)
+
+	item := FeedItem{
+		Source:      SourceGoogleNews,
+		Title:       "Breaking News - The Times",
+		URL:         "https://www.thetimes.com/article/123",
+		PublishedAt: published,
+		Metadata: map[string]string{
+			"source_name": "The Times",
+			"source_url":  "https://www.thetimes.com",
+		},
+	}
+
+	article := feedItemToNewsArticle(item)
+
+	if article.Title != "Breaking News - The Times" {
+		t.Errorf("Title = %q, want %q", article.Title, "Breaking News - The Times")
+	}
+	if article.URL != "https://www.thetimes.com/article/123" {
+		t.Errorf("URL = %q, want %q", article.URL, "https://www.thetimes.com/article/123")
+	}
+	if article.Source != "The Times" {
+		t.Errorf("Source = %q, want %q", article.Source, "The Times")
+	}
+	if article.SourceURL != "https://www.thetimes.com" {
+		t.Errorf("SourceURL = %q, want %q", article.SourceURL, "https://www.thetimes.com")
+	}
+	if !article.PublishedAt.Equal(published) {
+		t.Errorf("PublishedAt = %v, want %v", article.PublishedAt, published)
+	}
+}
+
+func TestFeedItemToNewsArticle_MissingMetadata(t *testing.T) {
+	item := FeedItem{
+		Source:   SourceGoogleNews,
+		Title:    "Article",
+		URL:      "https://example.com",
+		Metadata: map[string]string{},
+	}
+
+	article := feedItemToNewsArticle(item)
+
+	if article.Source != "" {
+		t.Errorf("Source = %q, want empty", article.Source)
+	}
+	if article.SourceURL != "" {
+		t.Errorf("SourceURL = %q, want empty", article.SourceURL)
 	}
 }
