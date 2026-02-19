@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 	"github.com/myamout/byline/backend/internal/store"
@@ -55,6 +56,19 @@ func New(cfg Config, st store.Store, logger *slog.Logger) *Poller {
 			interval = 1 * time.Hour
 		}
 		src := NewOSSInsightSource(ossinsight.NewClient(), cfg.OSSInsight.Queries)
+		p.runners = append(p.runners, sourceRunner{source: src, interval: interval})
+	}
+
+	if cfg.GoogleNews != nil {
+		interval := cfg.GoogleNews.Interval
+		if interval == 0 {
+			interval = 30 * time.Minute
+		}
+		feedURL := cfg.GoogleNews.FeedURL
+		if feedURL == "" {
+			feedURL = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
+		}
+		src := NewGoogleNewsSource(googlenews.NewParser(), feedURL)
 		p.runners = append(p.runners, sourceRunner{source: src, interval: interval})
 	}
 
@@ -170,6 +184,18 @@ func (p *Poller) persist(ctx context.Context, src Source, items []FeedItem) erro
 			return fmt.Errorf("inserting trending repos: %w", err)
 		}
 		p.logger.Debug("trending repos insert complete", "rows_inserted", n)
+		return nil
+
+	case "googlenews":
+		articles := make([]googlenews.Article, 0, len(items))
+		for _, item := range items {
+			articles = append(articles, feedItemToNewsArticle(item))
+		}
+		n, err := p.store.UpsertNewsArticles(ctx, articles)
+		if err != nil {
+			return fmt.Errorf("upserting news articles: %w", err)
+		}
+		p.logger.Debug("news articles upsert complete", "rows_affected", n)
 		return nil
 
 	default:
