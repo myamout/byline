@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
+	"github.com/myamout/byline/backend/internal/googlenews"
 	"github.com/myamout/byline/backend/internal/ossinsight"
 	"github.com/myamout/byline/backend/internal/reddit"
 )
@@ -49,7 +51,7 @@ func setupTestStore(t *testing.T) *PostgresStore {
 	}
 
 	// Truncate tables before each test for isolation (run at start too).
-	_, err = s.pool.Exec(ctx, "TRUNCATE reddit_articles, trending_repos RESTART IDENTITY CASCADE")
+	_, err = s.pool.Exec(ctx, "TRUNCATE reddit_articles, trending_repos, news_articles RESTART IDENTITY CASCADE")
 	if err != nil {
 		s.Close()
 		t.Fatalf("truncating tables: %v", err)
@@ -57,7 +59,7 @@ func setupTestStore(t *testing.T) *PostgresStore {
 
 	t.Cleanup(func() {
 		cleanCtx := context.Background()
-		_, _ = s.pool.Exec(cleanCtx, "TRUNCATE reddit_articles, trending_repos RESTART IDENTITY CASCADE")
+		_, _ = s.pool.Exec(cleanCtx, "TRUNCATE reddit_articles, trending_repos, news_articles RESTART IDENTITY CASCADE")
 		s.Close()
 	})
 
@@ -112,6 +114,16 @@ func makeRepo(id int, name, lang string, score int) ossinsight.Repository {
 		TotalScore:        score,
 		ContributorLogins: "user1,user2",
 		CollectionNames:   "collection1",
+	}
+}
+
+func makeNewsArticle(url, title, source string) googlenews.Article {
+	return googlenews.Article{
+		Title:       title,
+		URL:         url,
+		Source:      source,
+		SourceURL:   "https://www." + strings.ToLower(strings.ReplaceAll(source, " ", "")) + ".com",
+		PublishedAt: time.Now().Truncate(time.Microsecond).UTC(),
 	}
 }
 
@@ -780,6 +792,271 @@ func TestDeleteTrendingRepo(t *testing.T) {
 	deleted, err = s.DeleteTrendingRepo(ctx, id)
 	if err != nil {
 		t.Fatalf("DeleteTrendingRepo (second): %v", err)
+	}
+	if deleted {
+		t.Error("expected deleted=false for already-deleted row")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// News Articles
+// ---------------------------------------------------------------------------
+
+func TestUpsertNewsArticle_Insert(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	a := makeNewsArticle("https://example.com/news1", "Test News Article 1", "The Example Times")
+	id, err := s.UpsertNewsArticle(ctx, a)
+	if err != nil {
+		t.Fatalf("UpsertNewsArticle: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected id > 0, got %d", id)
+	}
+
+	got, err := s.GetNewsArticleByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetNewsArticleByID: %v", err)
+	}
+	if got.Title != a.Title {
+		t.Errorf("title: got %q, want %q", got.Title, a.Title)
+	}
+	if got.URL != a.URL {
+		t.Errorf("url: got %q, want %q", got.URL, a.URL)
+	}
+	if got.Source != a.Source {
+		t.Errorf("source: got %q, want %q", got.Source, a.Source)
+	}
+	if got.SourceURL != a.SourceURL {
+		t.Errorf("source_url: got %q, want %q", got.SourceURL, a.SourceURL)
+	}
+	if !got.PublishedAt.Equal(a.PublishedAt) {
+		t.Errorf("published_at: got %v, want %v", got.PublishedAt, a.PublishedAt)
+	}
+}
+
+func TestUpsertNewsArticle_Update(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	a := makeNewsArticle("https://example.com/news-upsert", "Original News Title", "The Example Times")
+	id1, err := s.UpsertNewsArticle(ctx, a)
+	if err != nil {
+		t.Fatalf("first UpsertNewsArticle: %v", err)
+	}
+
+	a.Title = "Updated News Title"
+	id2, err := s.UpsertNewsArticle(ctx, a)
+	if err != nil {
+		t.Fatalf("second UpsertNewsArticle: %v", err)
+	}
+	if id1 != id2 {
+		t.Errorf("expected same id after upsert: got %d and %d", id1, id2)
+	}
+
+	got, err := s.GetNewsArticleByID(ctx, id1)
+	if err != nil {
+		t.Fatalf("GetNewsArticleByID: %v", err)
+	}
+	if got.Title != "Updated News Title" {
+		t.Errorf("title not updated: got %q, want %q", got.Title, "Updated News Title")
+	}
+}
+
+func TestUpsertNewsArticles_Batch(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	articles := make([]googlenews.Article, 10)
+	for i := range articles {
+		articles[i] = makeNewsArticle(
+			fmt.Sprintf("https://example.com/news-batch-%d", i),
+			fmt.Sprintf("Batch News Article %d", i),
+			"The Example Times",
+		)
+	}
+
+	count, err := s.UpsertNewsArticles(ctx, articles)
+	if err != nil {
+		t.Fatalf("UpsertNewsArticles: %v", err)
+	}
+	if count != 10 {
+		t.Errorf("expected 10 rows affected, got %d", count)
+	}
+
+	// Verify all articles are retrievable.
+	listed, err := s.ListNewsArticles(ctx, ListOptions{Limit: 20})
+	if err != nil {
+		t.Fatalf("ListNewsArticles: %v", err)
+	}
+	if len(listed) != 10 {
+		t.Errorf("expected 10 articles listed, got %d", len(listed))
+	}
+}
+
+func TestUpsertNewsArticles_EmptySlice(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	count, err := s.UpsertNewsArticles(ctx, nil)
+	if err != nil {
+		t.Fatalf("UpsertNewsArticles(nil): %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 rows affected for nil, got %d", count)
+	}
+
+	count, err = s.UpsertNewsArticles(ctx, []googlenews.Article{})
+	if err != nil {
+		t.Fatalf("UpsertNewsArticles(empty): %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 rows affected for empty slice, got %d", count)
+	}
+}
+
+func TestGetNewsArticleByID_NotFound(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	_, err := s.GetNewsArticleByID(ctx, 999999)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestListNewsArticles_Pagination(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	// Insert 12 articles with staggered published_at times so ordering is deterministic.
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := range 12 {
+		a := makeNewsArticle(
+			fmt.Sprintf("https://example.com/news-page-%d", i),
+			fmt.Sprintf("Page News Article %d", i),
+			"The Example Times",
+		)
+		a.PublishedAt = base.Add(time.Duration(i) * time.Hour)
+		if _, err := s.UpsertNewsArticle(ctx, a); err != nil {
+			t.Fatalf("UpsertNewsArticle[%d]: %v", i, err)
+		}
+	}
+
+	// Fetch all IDs in the expected order so we can compute cursors.
+	rows, err := s.pool.Query(ctx, `
+		SELECT id FROM news_articles
+		ORDER BY published_at DESC, id DESC
+	`)
+	if err != nil {
+		t.Fatalf("query IDs: %v", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan id: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if len(ids) != 12 {
+		t.Fatalf("expected 12 ids, got %d", len(ids))
+	}
+
+	// Page 1: first 5 articles (most recent).
+	page1, err := s.ListNewsArticles(ctx, ListOptions{Limit: 5, Cursor: 0})
+	if err != nil {
+		t.Fatalf("ListNewsArticles page1: %v", err)
+	}
+	if len(page1) != 5 {
+		t.Fatalf("page1: expected 5 articles, got %d", len(page1))
+	}
+
+	// Verify descending order: each article's published_at should be >= next.
+	for i := 1; i < len(page1); i++ {
+		if page1[i].PublishedAt.After(page1[i-1].PublishedAt) {
+			t.Errorf("page1 not in descending order at index %d", i)
+		}
+	}
+
+	// Page 2: cursor is the ID of the last item on page 1 (index 4).
+	cursor := ids[4]
+	page2, err := s.ListNewsArticles(ctx, ListOptions{Limit: 5, Cursor: cursor})
+	if err != nil {
+		t.Fatalf("ListNewsArticles page2: %v", err)
+	}
+	if len(page2) != 5 {
+		t.Fatalf("page2: expected 5 articles, got %d", len(page2))
+	}
+
+	// Page 3: remaining 2 articles.
+	cursor = ids[9]
+	page3, err := s.ListNewsArticles(ctx, ListOptions{Limit: 5, Cursor: cursor})
+	if err != nil {
+		t.Fatalf("ListNewsArticles page3: %v", err)
+	}
+	if len(page3) != 2 {
+		t.Fatalf("page3: expected 2 articles, got %d", len(page3))
+	}
+
+	// Page 4: cursor is the last ID; should return 0 articles.
+	cursor = ids[11]
+	page4, err := s.ListNewsArticles(ctx, ListOptions{Limit: 5, Cursor: cursor})
+	if err != nil {
+		t.Fatalf("ListNewsArticles page4: %v", err)
+	}
+	if len(page4) != 0 {
+		t.Errorf("page4: expected 0 articles, got %d", len(page4))
+	}
+
+	// Total collected across pages should be 12 unique articles.
+	total := len(page1) + len(page2) + len(page3)
+	if total != 12 {
+		t.Errorf("total articles across pages: got %d, want 12", total)
+	}
+
+	// Verify no overlap between pages by checking titles are distinct.
+	seen := make(map[string]bool)
+	for _, page := range [][]googlenews.Article{page1, page2, page3} {
+		for _, a := range page {
+			if seen[a.Title] {
+				t.Errorf("duplicate article across pages: %q", a.Title)
+			}
+			seen[a.Title] = true
+		}
+	}
+}
+
+func TestDeleteNewsArticle(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	a := makeNewsArticle("https://example.com/news-delete-me", "Delete Me", "The Example Times")
+	id, err := s.UpsertNewsArticle(ctx, a)
+	if err != nil {
+		t.Fatalf("UpsertNewsArticle: %v", err)
+	}
+
+	deleted, err := s.DeleteNewsArticle(ctx, id)
+	if err != nil {
+		t.Fatalf("DeleteNewsArticle: %v", err)
+	}
+	if !deleted {
+		t.Error("expected deleted=true")
+	}
+
+	// Verify it is gone.
+	_, err = s.GetNewsArticleByID(ctx, id)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+
+	// Delete again -- should return false.
+	deleted, err = s.DeleteNewsArticle(ctx, id)
+	if err != nil {
+		t.Fatalf("DeleteNewsArticle (second): %v", err)
 	}
 	if deleted {
 		t.Error("expected deleted=false for already-deleted row")
