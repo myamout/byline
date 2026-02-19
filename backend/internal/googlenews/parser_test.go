@@ -1,6 +1,11 @@
 package googlenews
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -175,5 +180,169 @@ func TestNewParser(t *testing.T) {
 
 	if p.httpClient == nil {
 		t.Error("httpClient is nil")
+	}
+}
+
+func TestNewParserWithClient(t *testing.T) {
+	client := &http.Client{Timeout: 42 * time.Second}
+	p := NewParserWithClient(client)
+
+	if p == nil {
+		t.Fatal("NewParserWithClient() returned nil")
+	}
+	if p.feedParser == nil {
+		t.Error("feedParser is nil")
+	}
+	if p.httpClient != client {
+		t.Error("httpClient was not set to provided client")
+	}
+}
+
+// rssFeedTemplate builds an RSS feed XML string with <link> values pointing
+// to the given base URL. Each item's link is baseURL + path suffix.
+func rssFeedTemplate(baseURL string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Top stories - Google News</title>
+    <link>https://news.google.com</link>
+    <description>Google News</description>
+    <item>
+      <title>Article One - Publisher A</title>
+      <link>%s/rss/articles/CBMiXX123</link>
+      <guid isPermaLink="false">CBMiXX123</guid>
+      <pubDate>Wed, 19 Feb 2026 10:30:00 GMT</pubDate>
+      <source url="https://www.publishera.com">Publisher A</source>
+    </item>
+    <item>
+      <title>Article Two - Publisher B</title>
+      <link>%s/rss/articles/CBMiYY456</link>
+      <guid isPermaLink="false">CBMiYY456</guid>
+      <pubDate>Wed, 19 Feb 2026 09:00:00 GMT</pubDate>
+      <source url="https://www.publisherb.com">Publisher B</source>
+    </item>
+  </channel>
+</rss>`, baseURL, baseURL)
+}
+
+func TestParseFeed_ResolvesRedirects(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/rss":
+			// Serve the RSS feed with links that point back to this server.
+			w.Header().Set("Content-Type", "application/rss+xml")
+			fmt.Fprint(w, rssFeedTemplate("http://"+r.Host))
+
+		case r.URL.Path == "/rss/articles/CBMiXX123":
+			// Redirect to the "real" article URL.
+			http.Redirect(w, r, "https://www.publishera.com/actual-article-1", http.StatusFound)
+
+		case r.URL.Path == "/rss/articles/CBMiYY456":
+			// Redirect to the "real" article URL.
+			http.Redirect(w, r, "https://www.publisherb.com/actual-article-2", http.StatusFound)
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	p := NewParserWithClient(ts.Client())
+
+	articles, err := p.ParseFeed(context.Background(), ts.URL+"/rss")
+	if err != nil {
+		t.Fatalf("ParseFeed() error = %v", err)
+	}
+
+	if len(articles) != 2 {
+		t.Fatalf("Expected 2 articles, got %d", len(articles))
+	}
+
+	// Verify that URLs have been resolved to the redirect targets,
+	// not the original Google News redirect URLs.
+	wantURL1 := "https://www.publishera.com/actual-article-1"
+	if articles[0].URL != wantURL1 {
+		t.Errorf("articles[0].URL = %q, want %q", articles[0].URL, wantURL1)
+	}
+
+	wantURL2 := "https://www.publisherb.com/actual-article-2"
+	if articles[1].URL != wantURL2 {
+		t.Errorf("articles[1].URL = %q, want %q", articles[1].URL, wantURL2)
+	}
+
+	// Verify other fields are still populated.
+	if articles[0].Source != "Publisher A" {
+		t.Errorf("articles[0].Source = %q, want %q", articles[0].Source, "Publisher A")
+	}
+	if articles[0].Title != "Article One - Publisher A" {
+		t.Errorf("articles[0].Title = %q, want %q", articles[0].Title, "Article One - Publisher A")
+	}
+	if articles[1].Source != "Publisher B" {
+		t.Errorf("articles[1].Source = %q, want %q", articles[1].Source, "Publisher B")
+	}
+}
+
+func TestParseFeed_SkipsOnRedirectFailure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/rss":
+			w.Header().Set("Content-Type", "application/rss+xml")
+			fmt.Fprint(w, rssFeedTemplate("http://"+r.Host))
+
+		case r.URL.Path == "/rss/articles/CBMiXX123":
+			// First article: server error — should be skipped.
+			w.WriteHeader(http.StatusInternalServerError)
+
+		case r.URL.Path == "/rss/articles/CBMiYY456":
+			// Second article: successful redirect.
+			http.Redirect(w, r, "https://www.publisherb.com/actual-article-2", http.StatusFound)
+
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	p := NewParserWithClient(ts.Client())
+
+	articles, err := p.ParseFeed(context.Background(), ts.URL+"/rss")
+	if err != nil {
+		t.Fatalf("ParseFeed() error = %v", err)
+	}
+
+	// Only the second article should be returned; the first had a 500 error.
+	if len(articles) != 1 {
+		t.Fatalf("Expected 1 article, got %d", len(articles))
+	}
+
+	if articles[0].Title != "Article Two - Publisher B" {
+		t.Errorf("articles[0].Title = %q, want %q", articles[0].Title, "Article Two - Publisher B")
+	}
+
+	wantURL := "https://www.publisherb.com/actual-article-2"
+	if articles[0].URL != wantURL {
+		t.Errorf("articles[0].URL = %q, want %q", articles[0].URL, wantURL)
+	}
+}
+
+func TestParseFeed_CancelledContext(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, rssFeedTemplate("http://"+r.Host))
+	}))
+	defer ts.Close()
+
+	p := NewParserWithClient(ts.Client())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	_, err := p.ParseFeed(ctx, ts.URL+"/rss")
+	if err == nil {
+		t.Fatal("Expected error for cancelled context, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "context canceled") {
+		t.Errorf("Expected context canceled error, got: %v", err)
 	}
 }

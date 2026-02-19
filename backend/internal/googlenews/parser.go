@@ -3,7 +3,10 @@
 package googlenews
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -49,6 +52,94 @@ func NewParser() *Parser {
 		feedParser: fp,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+// NewParserWithClient creates a new Google News RSS feed parser with the
+// provided HTTP client. This is useful for testing with httptest servers
+// or when custom HTTP transport configuration is needed.
+func NewParserWithClient(client *http.Client) *Parser {
+	fp := gofeed.NewParser()
+	fp.RSSTranslator = &sourcePreservingTranslator{}
+
+	return &Parser{
+		feedParser: fp,
+		httpClient: client,
+	}
+}
+
+// ParseFeed fetches a Google News RSS feed from the given URL, extracts
+// articles, and resolves Google redirect URLs to the actual article URLs.
+// Articles whose redirect resolution fails are silently skipped (logged
+// but not returned).
+func (p *Parser) ParseFeed(ctx context.Context, feedURL string) ([]Article, error) {
+	feed, err := p.feedParser.ParseURLWithContext(feedURL, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch feed from %s: %w", feedURL, err)
+	}
+
+	raw := p.extractArticles(feed)
+	articles := make([]Article, 0, len(raw))
+
+	for _, a := range raw {
+		resolved, err := p.resolveURL(ctx, a.URL)
+		if err != nil {
+			log.Printf("googlenews: skipping article %q: resolve redirect: %v", a.Title, err)
+			continue
+		}
+		a.URL = resolved
+		articles = append(articles, a)
+	}
+
+	return articles, nil
+}
+
+// errRedirectCaptured is a sentinel error used internally by resolveURL
+// to stop the HTTP client from following redirects. When the CheckRedirect
+// function captures the final redirect Location, it returns this error to
+// halt the redirect chain.
+var errRedirectCaptured = errors.New("redirect captured")
+
+// resolveURL follows redirects from a Google News URL to determine the
+// final article URL. It issues an HTTP HEAD request and uses a custom
+// CheckRedirect function to capture the target of the redirect chain
+// without actually following it to the (potentially unreachable) external
+// host. If the URL returns a 2xx status with no redirect, the original URL
+// is returned. Non-2xx responses (e.g. 500) produce an error.
+func (p *Parser) resolveURL(ctx context.Context, googleURL string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var finalURL string
+
+	// Create a shallow copy of the HTTP client so the custom CheckRedirect
+	// does not affect the shared client used for feed fetching.
+	client := *p.httpClient
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		finalURL = req.URL.String()
+		return errRedirectCaptured
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, googleURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		// If the error wraps our sentinel, the redirect was captured successfully.
+		if errors.Is(err, errRedirectCaptured) && finalURL != "" {
+			return finalURL, nil
+		}
+		return "", fmt.Errorf("executing request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// No redirect occurred. If the status is 2xx, return the original URL.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return googleURL, nil
+	}
+
+	return "", fmt.Errorf("unexpected status %d for %s", resp.StatusCode, googleURL)
 }
 
 // ParseString parses a Google News RSS feed from a string and returns
